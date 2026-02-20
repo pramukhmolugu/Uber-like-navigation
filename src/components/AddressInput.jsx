@@ -7,13 +7,6 @@ function getDebounceMs(q) {
   return /^\d/.test(q.trim()) || /\b[A-Za-z]{2}$/.test(q.trim()) ? 600 : 350;
 }
 
-function debounce(fn, delay) {
-  let timer;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), delay);
-  };
-}
 
 const PLACE_ICONS = {
   amenity: '🏪',
@@ -232,19 +225,23 @@ export default function AddressInput({ label, placeholder, value, onSelect, colo
                     textOverflow: 'ellipsis',
                   }}
                 >
-                  {item.shortName.split(',')[0]}
+                  {/* Show house number + street, or place name — never cut off at first comma */}
+                  {item.shortName.split(',')[0].trim()}
                 </div>
                 <div
                   style={{
                     fontSize: 12,
-                    color: '#888',
+                    color: '#555',
                     marginTop: 2,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                   }}
                 >
-                  {item.displayName.split(',').slice(1, 4).join(',').trim()}
+                  {/* Use the city/state tail of shortName — clean and always correct */}
+                  {item.shortName.includes(',')
+                    ? item.shortName.split(',').slice(1).join(',').trim()
+                    : item.displayName.split(',').slice(1, 3).join(',').trim()}
                 </div>
               </div>
             </button>
