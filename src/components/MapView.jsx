@@ -2,26 +2,43 @@ import { useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// SVG icons
+// SVG icons — white top-down car (front points up, rotate via heading)
 const CAR_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 72" width="40" height="72">
   <defs>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.35)"/>
+    <filter id="carShadow" x="-40%" y="-20%" width="180%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="rgba(0,0,0,0.38)"/>
     </filter>
   </defs>
-  <g filter="url(#shadow)">
-    <rect x="8" y="20" width="48" height="26" rx="6" fill="#1a1a1a"/>
-    <rect x="14" y="14" width="36" height="18" rx="5" fill="#333"/>
-    <rect x="16" y="16" width="14" height="12" rx="3" fill="#87CEEB" opacity="0.8"/>
-    <rect x="34" y="16" width="14" height="12" rx="3" fill="#87CEEB" opacity="0.8"/>
-    <circle cx="18" cy="46" r="7" fill="#222"/>
-    <circle cx="18" cy="46" r="4" fill="#555"/>
-    <circle cx="46" cy="46" r="7" fill="#222"/>
-    <circle cx="46" cy="46" r="4" fill="#555"/>
-    <rect x="8" y="28" width="4" height="6" rx="2" fill="#FFD700"/>
-    <rect x="52" y="28" width="4" height="6" rx="2" fill="#FF4444"/>
-    <rect x="8" y="36" width="48" height="3" rx="1" fill="#444"/>
+  <g filter="url(#carShadow)">
+    <!-- Body -->
+    <rect x="5" y="8" width="30" height="56" rx="11" fill="#ffffff"/>
+    <!-- Front bumper -->
+    <rect x="10" y="4" width="20" height="8" rx="4" fill="#e0e0e0"/>
+    <!-- Rear bumper -->
+    <rect x="10" y="60" width="20" height="8" rx="4" fill="#d0d0d0"/>
+    <!-- Front windshield -->
+    <rect x="9" y="14" width="22" height="14" rx="4" fill="#aecde8" opacity="0.85"/>
+    <!-- Roof panel -->
+    <rect x="10" y="28" width="20" height="16" rx="3" fill="#ebebeb"/>
+    <!-- Rear windshield -->
+    <rect x="9" y="44" width="22" height="12" rx="4" fill="#aecde8" opacity="0.75"/>
+    <!-- Front-left wheel -->
+    <rect x="0" y="14" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
+    <!-- Front-right wheel -->
+    <rect x="33" y="14" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
+    <!-- Rear-left wheel -->
+    <rect x="0" y="45" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
+    <!-- Rear-right wheel -->
+    <rect x="33" y="45" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
+    <!-- Headlights -->
+    <rect x="10" y="9" width="7" height="4" rx="2" fill="#fffbe6"/>
+    <rect x="23" y="9" width="7" height="4" rx="2" fill="#fffbe6"/>
+    <!-- Tail lights -->
+    <rect x="10" y="59" width="7" height="4" rx="2" fill="#ff4d4d"/>
+    <rect x="23" y="59" width="7" height="4" rx="2" fill="#ff4d4d"/>
+    <!-- Center stripe -->
+    <rect x="19" y="28" width="2" height="16" rx="1" fill="#d8d8d8"/>
   </g>
 </svg>`;
 
@@ -55,9 +72,9 @@ const DEST_SVG = `
 
 function createCarIcon(heading = 0) {
   return L.divIcon({
-    html: `<div style="transform:rotate(${heading}deg);transform-origin:center;width:48px;height:48px;display:flex;align-items:center;justify-content:center;">${CAR_SVG}</div>`,
-    iconSize: [48, 48],
-    iconAnchor: [24, 24],
+    html: `<div style="transform:rotate(${heading}deg);transform-origin:center;width:40px;height:72px;display:flex;align-items:center;justify-content:center;">${CAR_SVG}</div>`,
+    iconSize: [40, 72],
+    iconAnchor: [20, 36],
     className: '',
   });
 }
@@ -233,8 +250,8 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
     if (!isAnimating || !route) return;
 
     const coords = route.coordinates;
-    // Duration based on route distance (~40 km/h simulated)
-    const duration = Math.min(Math.max(route.duration * 1000 * 0.15, 5000), 20000);
+    // Duration: slow realistic car movement (25–45 s for typical NYC routes)
+    const duration = Math.min(Math.max(route.duration * 1000 * 0.25, 25000), 45000);
     animDurationRef.current = duration;
     animStartRef.current = null;
 
@@ -242,11 +259,12 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
       if (!animStartRef.current) animStartRef.current = timestamp;
       const elapsed = timestamp - animStartRef.current;
       const rawT = Math.min(elapsed / duration, 1);
-      const t = ease(rawT);
+      // linear movement — constant speed so the car glides smoothly
+      const t = rawT;
 
       const pos = interpolate(coords, t);
-      const nextT = Math.min(rawT + 0.01, 1);
-      const nextPos = interpolate(coords, ease(nextT));
+      const nextT = Math.min(rawT + 0.005, 1);
+      const nextPos = interpolate(coords, nextT);
       const heading = calcHeading(pos, nextPos);
 
       if (carMarkerRef.current) {

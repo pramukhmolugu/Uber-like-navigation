@@ -1,6 +1,6 @@
 const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org';
 
-export async function searchAddress(query, limit = 5) {
+export async function searchAddress(query, limit = 8) {
   if (!query || query.trim().length < 2) return [];
 
   const params = new URLSearchParams({
@@ -8,11 +8,16 @@ export async function searchAddress(query, limit = 5) {
     format: 'json',
     limit: String(limit),
     addressdetails: '1',
-    countrycodes: '',
+    namedetails: '1',
+    countrycodes: 'us',
+    'accept-language': 'en',
   });
 
   const res = await fetch(`${NOMINATIM_BASE}/search?${params}`, {
-    headers: { 'Accept-Language': 'en' },
+    headers: {
+      'Accept-Language': 'en',
+      'User-Agent': 'UberLikeNavigationApp/1.0',
+    },
   });
 
   if (!res.ok) throw new Error('Geocoding request failed');
@@ -35,10 +40,15 @@ export async function reverseGeocode(lat, lon) {
     lon: String(lon),
     format: 'json',
     addressdetails: '1',
+    namedetails: '1',
+    'accept-language': 'en',
   });
 
   const res = await fetch(`${NOMINATIM_BASE}/reverse?${params}`, {
-    headers: { 'Accept-Language': 'en' },
+    headers: {
+      'Accept-Language': 'en',
+      'User-Agent': 'UberLikeNavigationApp/1.0',
+    },
   });
 
   if (!res.ok) throw new Error('Reverse geocoding failed');
@@ -53,19 +63,38 @@ export async function reverseGeocode(lat, lon) {
 
 function buildShortName(item) {
   const addr = item.address || {};
-  const parts = [];
-  if (addr.amenity) parts.push(addr.amenity);
-  else if (addr.building) parts.push(addr.building);
-  else if (addr.road) parts.push(addr.road);
-  else if (item.name) parts.push(item.name);
+  const nameDetails = item.namedetails || {};
 
-  if (addr.city) parts.push(addr.city);
-  else if (addr.town) parts.push(addr.town);
-  else if (addr.village) parts.push(addr.village);
+  // For named places (Times Square, Empire State Building, etc.) use the place name
+  const placeName = item.name || nameDetails['name:en'] || nameDetails.name;
 
+  // Build street address string
+  const streetParts = [];
+  if (addr.house_number) streetParts.push(addr.house_number);
+  if (addr.road) streetParts.push(addr.road);
+  const street = streetParts.join(' ');
+
+  // Decide primary label
+  let primary = '';
+  if (placeName && placeName !== addr.road) {
+    primary = placeName;
+  } else if (street) {
+    primary = street;
+  } else if (addr.amenity) {
+    primary = addr.amenity;
+  } else if (addr.building) {
+    primary = addr.building;
+  } else {
+    primary = (item.display_name || '').split(',')[0].trim();
+  }
+
+  // Locality
+  const city =
+    addr.city || addr.town || addr.suburb || addr.borough || addr.village || '';
+
+  const parts = [primary];
+  if (city && city !== primary) parts.push(city);
   if (addr.state) parts.push(addr.state);
 
-  return parts.length > 0
-    ? parts.join(', ')
-    : (item.display_name || '').split(',').slice(0, 3).join(',').trim();
+  return parts.filter(Boolean).join(', ');
 }
