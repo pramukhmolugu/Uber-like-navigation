@@ -2,6 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { searchAddress } from '../utils/geocoding';
 
+// Shorter debounce for address-like queries (start with digit or end with 2-letter word)
+function getDebounceMs(q) {
+  return /^\d/.test(q.trim()) || /\b[A-Za-z]{2}$/.test(q.trim()) ? 600 : 350;
+}
+
 function debounce(fn, delay) {
   let timer;
   return (...args) => {
@@ -42,8 +47,13 @@ export default function AddressInput({ label, placeholder, value, onSelect, colo
     }
   }, [value, focused]);
 
-  const doSearch = useCallback(
-    debounce(async (q) => {
+  // Recreate debounced fn whenever query changes (so delay adapts)
+  const doSearchRef = useRef(null);
+  const doSearch = useCallback((q) => {
+    if (doSearchRef.current) doSearchRef.current.cancel?.();
+    const delay = getDebounceMs(q);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
       if (q.trim().length < 2) {
         setResults([]);
         setLoading(false);
@@ -51,15 +61,15 @@ export default function AddressInput({ label, placeholder, value, onSelect, colo
       }
       try {
         const data = await searchAddress(q, 8);
-        setResults(data);
+        if (!cancelled) setResults(data);
       } catch {
-        setResults([]);
+        if (!cancelled) setResults([]);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    }, 400),
-    []
-  );
+    }, delay);
+    doSearchRef.current = { cancel: () => { cancelled = true; clearTimeout(timer); } };
+  }, []);
 
   const updateDropdownPos = useCallback(() => {
     if (wrapperRef.current) {
@@ -86,6 +96,34 @@ export default function AddressInput({ label, placeholder, value, onSelect, colo
     setFocused(false);
     onSelect(item);
     inputRef.current?.blur();
+  };
+
+  const handleKeyDown = async (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // If we have results, select the first one
+      if (results.length > 0) {
+        handleSelect(results[0]);
+        return;
+      }
+      // Otherwise geocode the raw text right now
+      const q = query.trim();
+      if (q.length < 2) return;
+      setLoading(true);
+      try {
+        const data = await searchAddress(q, 1);
+        if (data.length > 0) {
+          handleSelect(data[0]);
+        }
+      } catch {
+        // no-op
+      } finally {
+        setLoading(false);
+      }
+    } else if (e.key === 'ArrowDown') {
+      // Move focus into the dropdown
+      dropdownRef.current?.querySelector('button')?.focus();
+    }
   };
 
   const handleFocus = () => {
@@ -139,8 +177,11 @@ export default function AddressInput({ label, placeholder, value, onSelect, colo
             </div>
           )}
           {!loading && results.length === 0 && query.trim().length >= 2 && (
-            <div style={{ padding: '16px', textAlign: 'center', color: '#999', fontSize: 14 }}>
-              No results found
+            <div style={{ padding: '14px 16px', color: '#666', fontSize: 13 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>No suggestions yet</div>
+              <div style={{ color: '#999' }}>
+                Press <kbd style={{ background: '#f0f0f0', borderRadius: 4, padding: '1px 6px', fontSize: 12, border: '1px solid #ddd' }}>Enter</kbd> to search for this address
+              </div>
             </div>
           )}
           {results.map((item, i) => (
@@ -243,6 +284,7 @@ export default function AddressInput({ label, placeholder, value, onSelect, colo
           onChange={handleChange}
           onFocus={handleFocus}
           onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder}
           style={{
             flex: 1,
