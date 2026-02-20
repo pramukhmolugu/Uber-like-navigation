@@ -1,29 +1,74 @@
-const OSRM_BASE = 'https://router.project-osrm.org/route/v1/driving';
+const VALHALLA_BASE = 'https://valhalla1.openstreetmap.de/route';
+
+// Decode Valhalla's encoded polyline (precision 6)
+function decodePolyline(encoded, precision = 6) {
+  const factor = Math.pow(10, precision);
+  const coords = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let b, shift = 0, result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+
+    coords.push([lat / factor, lng / factor]);
+  }
+  return coords;
+}
 
 export async function getRoute(from, to) {
-  // from/to: { lat, lon }
-  const coords = `${from.lon},${from.lat};${to.lon},${to.lat}`;
-  const params = new URLSearchParams({
-    overview: 'full',
-    geometries: 'geojson',
-    steps: 'true',
+  const body = {
+    locations: [
+      { lat: from.lat, lon: from.lon },
+      { lat: to.lat, lon: to.lon },
+    ],
+    costing: 'auto',
+    directions_options: { units: 'km' },
+  };
+
+  const res = await fetch(VALHALLA_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 
-  const res = await fetch(`${OSRM_BASE}/${coords}?${params}`);
   if (!res.ok) throw new Error('Routing request failed');
 
   const data = await res.json();
-  if (!data.routes || data.routes.length === 0) throw new Error('No route found');
+  if (!data.trip || !data.trip.legs || data.trip.legs.length === 0) {
+    throw new Error('No route found');
+  }
 
-  const route = data.routes[0];
-  const coordinates = route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+  const summary = data.trip.summary;
+  const shape = data.trip.legs[0].shape;
+  const coordinates = decodePolyline(shape, 6);
+
+  const distanceM = summary.length * 1000; // km -> m
+  const durationS = summary.time;          // seconds
 
   return {
     coordinates,
-    distance: route.distance, // meters
-    duration: route.duration, // seconds
-    distanceText: formatDistance(route.distance),
-    durationText: formatDuration(route.duration),
+    distance: distanceM,
+    duration: durationS,
+    distanceText: formatDistance(distanceM),
+    durationText: formatDuration(durationS),
   };
 }
 
