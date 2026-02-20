@@ -1,44 +1,55 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// SVG icons — white top-down car (front points up, rotate via heading)
+// Uber-style dark top-down sedan (front points up)
 const CAR_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 72" width="40" height="72">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 62" width="38" height="62">
   <defs>
-    <filter id="carShadow" x="-40%" y="-20%" width="180%" height="140%">
-      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="rgba(0,0,0,0.38)"/>
+    <filter id="carShadow" x="-50%" y="-30%" width="200%" height="160%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="rgba(0,0,0,0.45)"/>
     </filter>
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1c1c1c"/>
+      <stop offset="45%" stop-color="#2e2e2e"/>
+      <stop offset="100%" stop-color="#1c1c1c"/>
+    </linearGradient>
   </defs>
   <g filter="url(#carShadow)">
-    <!-- Body -->
-    <rect x="5" y="8" width="30" height="56" rx="11" fill="#ffffff"/>
+    <!-- Main body -->
+    <rect x="4" y="9" width="30" height="44" rx="9" fill="url(#bodyGrad)"/>
     <!-- Front bumper -->
-    <rect x="10" y="4" width="20" height="8" rx="4" fill="#e0e0e0"/>
+    <rect x="9" y="5" width="20" height="7" rx="4" fill="#222"/>
     <!-- Rear bumper -->
-    <rect x="10" y="60" width="20" height="8" rx="4" fill="#d0d0d0"/>
+    <rect x="9" y="50" width="20" height="7" rx="4" fill="#1a1a1a"/>
     <!-- Front windshield -->
-    <rect x="9" y="14" width="22" height="14" rx="4" fill="#aecde8" opacity="0.85"/>
+    <rect x="8" y="12" width="22" height="13" rx="4" fill="#5ba3c9" opacity="0.55"/>
     <!-- Roof panel -->
-    <rect x="10" y="28" width="20" height="16" rx="3" fill="#ebebeb"/>
+    <rect x="9" y="25" width="20" height="12" rx="3" fill="#242424"/>
     <!-- Rear windshield -->
-    <rect x="9" y="44" width="22" height="12" rx="4" fill="#aecde8" opacity="0.75"/>
-    <!-- Front-left wheel -->
-    <rect x="0" y="14" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
-    <!-- Front-right wheel -->
-    <rect x="33" y="14" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
-    <!-- Rear-left wheel -->
-    <rect x="0" y="45" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
-    <!-- Rear-right wheel -->
-    <rect x="33" y="45" width="7" height="13" rx="3.5" fill="#2a2a2a"/>
-    <!-- Headlights -->
-    <rect x="10" y="9" width="7" height="4" rx="2" fill="#fffbe6"/>
-    <rect x="23" y="9" width="7" height="4" rx="2" fill="#fffbe6"/>
+    <rect x="8" y="37" width="22" height="11" rx="4" fill="#5ba3c9" opacity="0.38"/>
+    <!-- Front headlights -->
+    <rect x="9" y="6" width="7" height="3.5" rx="1.75" fill="#fffde4"/>
+    <rect x="22" y="6" width="7" height="3.5" rx="1.75" fill="#fffde4"/>
+    <!-- Headlight glow -->
+    <rect x="10" y="6.5" width="5" height="2" rx="1" fill="#fff8c0" opacity="0.8"/>
+    <rect x="23" y="6.5" width="5" height="2" rx="1" fill="#fff8c0" opacity="0.8"/>
     <!-- Tail lights -->
-    <rect x="10" y="59" width="7" height="4" rx="2" fill="#ff4d4d"/>
-    <rect x="23" y="59" width="7" height="4" rx="2" fill="#ff4d4d"/>
-    <!-- Center stripe -->
-    <rect x="19" y="28" width="2" height="16" rx="1" fill="#d8d8d8"/>
+    <rect x="9" y="52" width="7" height="3" rx="1.5" fill="#cc0000"/>
+    <rect x="22" y="52" width="7" height="3" rx="1.5" fill="#cc0000"/>
+    <!-- Front wheels -->
+    <rect x="0" y="12" width="6" height="11" rx="3" fill="#111"/>
+    <rect x="32" y="12" width="6" height="11" rx="3" fill="#111"/>
+    <!-- Rear wheels -->
+    <rect x="0" y="39" width="6" height="11" rx="3" fill="#111"/>
+    <rect x="32" y="39" width="6" height="11" rx="3" fill="#111"/>
+    <!-- Wheel hub rims -->
+    <rect x="1" y="14" width="4" height="7" rx="2" fill="#2d2d2d"/>
+    <rect x="33" y="14" width="4" height="7" rx="2" fill="#2d2d2d"/>
+    <rect x="1" y="41" width="4" height="7" rx="2" fill="#2d2d2d"/>
+    <rect x="33" y="41" width="4" height="7" rx="2" fill="#2d2d2d"/>
+    <!-- Center console highlight -->
+    <rect x="17.5" y="27" width="3" height="8" rx="1.5" fill="#333"/>
   </g>
 </svg>`;
 
@@ -70,12 +81,14 @@ const DEST_SVG = `
   </g>
 </svg>`;
 
-function createCarIcon(heading = 0) {
+// Create car marker icon ONCE — the inner wrapper's CSS rotation is updated in-place,
+// so we never need to recreate the icon (which would cause DOM flicker).
+function createCarIcon() {
   return L.divIcon({
-    html: `<div style="transform:rotate(${heading}deg);transform-origin:center;width:40px;height:72px;display:flex;align-items:center;justify-content:center;">${CAR_SVG}</div>`,
-    iconSize: [40, 72],
-    iconAnchor: [20, 36],
-    className: '',
+    html: `<div class="car-rotate-wrapper" style="width:38px;height:62px;transform-origin:center;will-change:transform;">${CAR_SVG}</div>`,
+    iconSize: [38, 62],
+    iconAnchor: [19, 31],
+    className: 'car-icon-container',
   });
 }
 
@@ -106,22 +119,20 @@ function interpolate(coords, t) {
   return [a[0] + (b[0] - a[0]) * segT, a[1] + (b[1] - a[1]) * segT];
 }
 
-function ease(t) {
-  // cubic ease-in-out
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
-
 export default function MapView({ pickup, destination, route, isAnimating, onAnimationEnd, onMapClick }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const pickupMarkerRef = useRef(null);
   const destMarkerRef = useRef(null);
   const carMarkerRef = useRef(null);
+  // Direct ref to the inner rotation wrapper — updated via CSS, never via setIcon()
+  const carIconElRef = useRef(null);
   const routeLayerRef = useRef(null);
   const traveledLayerRef = useRef(null);
   const animFrameRef = useRef(null);
   const animStartRef = useRef(null);
-  const animDurationRef = useRef(8000);
+  // For smooth heading interpolation across frames
+  const currentHeadingRef = useRef(0);
 
   // Init map
   useEffect(() => {
@@ -197,7 +208,7 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
     }
   }, [destination]);
 
-  // Route polyline
+  // Route polyline + car initial placement
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -205,9 +216,10 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
     if (routeLayerRef.current) { map.removeLayer(routeLayerRef.current); routeLayerRef.current = null; }
     if (traveledLayerRef.current) { map.removeLayer(traveledLayerRef.current); traveledLayerRef.current = null; }
     if (carMarkerRef.current) { map.removeLayer(carMarkerRef.current); carMarkerRef.current = null; }
+    carIconElRef.current = null;
 
     if (route) {
-      // Background (remaining) route
+      // Faded route (remaining)
       routeLayerRef.current = L.polyline(route.coordinates, {
         color: '#276EF1',
         weight: 5,
@@ -216,7 +228,7 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
         lineJoin: 'round',
       }).addTo(map);
 
-      // Traveled route (will be updated during animation)
+      // Traveled route (updated during animation)
       traveledLayerRef.current = L.polyline([], {
         color: '#276EF1',
         weight: 5,
@@ -225,22 +237,34 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
         lineJoin: 'round',
       }).addTo(map);
 
-      // Car starts at pickup
+      // Car at pickup, pointing toward next waypoint
       const startCoord = route.coordinates[0];
       const nextCoord = route.coordinates[1] || startCoord;
-      const heading = calcHeading(startCoord, nextCoord);
+      const initialHeading = calcHeading(startCoord, nextCoord);
+      currentHeadingRef.current = initialHeading;
+
       carMarkerRef.current = L.marker(startCoord, {
-        icon: createCarIcon(heading),
+        icon: createCarIcon(),
         zIndexOffset: 1000,
       }).addTo(map);
 
-      // Fit map to route
+      // Grab the rotation wrapper DOM element (available after addTo)
+      requestAnimationFrame(() => {
+        const el = carMarkerRef.current?.getElement();
+        if (el) {
+          carIconElRef.current = el.querySelector('.car-rotate-wrapper');
+          if (carIconElRef.current) {
+            carIconElRef.current.style.transform = `rotate(${initialHeading}deg)`;
+          }
+        }
+      });
+
       const bounds = L.latLngBounds(route.coordinates);
       map.fitBounds(bounds, { padding: [80, 80], animate: true, duration: 1 });
     }
   }, [route]);
 
-  // Animation
+  // Smooth animation — position via setLatLng, rotation via direct CSS transform (no setIcon)
   useEffect(() => {
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
@@ -250,37 +274,51 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
     if (!isAnimating || !route) return;
 
     const coords = route.coordinates;
-    // Duration: slow realistic car movement (25–45 s for typical NYC routes)
+    // Duration: 25–45 s for typical routes
     const duration = Math.min(Math.max(route.duration * 1000 * 0.25, 25000), 45000);
-    animDurationRef.current = duration;
     animStartRef.current = null;
 
     const animate = (timestamp) => {
       if (!animStartRef.current) animStartRef.current = timestamp;
       const elapsed = timestamp - animStartRef.current;
       const rawT = Math.min(elapsed / duration, 1);
-      // linear movement — constant speed so the car glides smoothly
-      const t = rawT;
 
-      const pos = interpolate(coords, t);
-      const nextT = Math.min(rawT + 0.005, 1);
-      const nextPos = interpolate(coords, nextT);
-      const heading = calcHeading(pos, nextPos);
+      const pos = interpolate(coords, rawT);
 
+      // Look a little ahead for a stable heading (avoids micro-jitter from dense waypoints)
+      const lookT = Math.min(rawT + 0.015, 1);
+      const lookPos = interpolate(coords, lookT);
+      const targetHeading = calcHeading(pos, lookPos);
+
+      // Smooth heading: find shortest arc, then lerp 12% per frame (~60 fps → reaches target in ~5 frames)
+      let diff = targetHeading - currentHeadingRef.current;
+      if (diff > 180) diff -= 360;
+      if (diff < -180) diff += 360;
+      currentHeadingRef.current = ((currentHeadingRef.current + diff * 0.12) + 360) % 360;
+
+      // Move car position (Leaflet handles this smoothly via CSS translate)
       if (carMarkerRef.current) {
         carMarkerRef.current.setLatLng(pos);
-        carMarkerRef.current.setIcon(createCarIcon(heading));
+      }
+
+      // Rotate car icon via direct DOM style — zero DOM mutations, GPU-accelerated
+      if (!carIconElRef.current && carMarkerRef.current) {
+        const el = carMarkerRef.current.getElement();
+        if (el) carIconElRef.current = el.querySelector('.car-rotate-wrapper');
+      }
+      if (carIconElRef.current) {
+        carIconElRef.current.style.transform = `rotate(${currentHeadingRef.current}deg)`;
       }
 
       // Update traveled polyline
-      const traveledCount = Math.floor(t * (coords.length - 1));
+      const traveledCount = Math.floor(rawT * (coords.length - 1));
       const traveledCoords = [...coords.slice(0, traveledCount + 1), pos];
       if (traveledLayerRef.current) {
         traveledLayerRef.current.setLatLngs(traveledCoords);
       }
 
       // Pan camera to follow car
-      if (mapInstanceRef.current && rawT > 0.05) {
+      if (mapInstanceRef.current && rawT > 0.03) {
         mapInstanceRef.current.panTo(pos, { animate: true, duration: 0.5, noMoveStart: true });
       }
 
