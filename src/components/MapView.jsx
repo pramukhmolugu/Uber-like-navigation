@@ -117,7 +117,7 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
       attributionControl: false,
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
       subdomains: 'abcd',
     }).addTo(map);
@@ -192,17 +192,17 @@ export default function MapView({ pickup, destination, route, isAnimating, onAni
     if (route) {
       // Background (remaining) route
       routeLayerRef.current = L.polyline(route.coordinates, {
-        color: '#c8c8c8',
-        weight: 6,
-        opacity: 0.6,
+        color: '#276EF1',
+        weight: 5,
+        opacity: 0.35,
         lineCap: 'round',
         lineJoin: 'round',
       }).addTo(map);
 
       // Traveled route (will be updated during animation)
       traveledLayerRef.current = L.polyline([], {
-        color: '#1a1a1a',
-        weight: 6,
+        color: '#276EF1',
+        weight: 5,
         opacity: 1,
         lineCap: 'round',
         lineJoin: 'round',
