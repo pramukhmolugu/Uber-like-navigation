@@ -1,0 +1,544 @@
+{
+  "name": "Automated Job Search & AI Cover Letter Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 5 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 5AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "YOUR_RESUME_FILE_ID_HERE",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "google-drive-download",
+      "name": "Download Resume from Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [250, 300],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {}
+      },
+      "id": "extract-pdf-text",
+      "name": "Extract Resume Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "resume-text",
+              "name": "resumeText",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "search-date",
+              "name": "searchDate",
+              "value": "={{ $now.format('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-resume-text",
+      "name": "Store Resume Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const roles = [\n  'Data Analyst',\n  'Senior Data Analyst',\n  'Data Engineer',\n  'BI Developer'\n];\n\nconst resumeText = $input.first().json.resumeText;\nconst searchDate = $input.first().json.searchDate;\n\nconst items = roles.map(role => {\n  const encodedRole = encodeURIComponent(role);\n  // LinkedIn job search URL:\n  // f_TPR=r86400 => past 24 hours\n  // location=United States\n  // f_WT=2 => remote\n  // sortBy=DD => most recent\n  const linkedInUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodedRole}&location=United%20States&f_TPR=r86400&f_WT=2&sortBy=DD`;\n  return {\n    json: {\n      role: role,\n      searchUrl: linkedInUrl,\n      resumeText: resumeText,\n      searchDate: searchDate\n    }\n  };\n});\n\nreturn items;"
+      },
+      "id": "generate-search-urls",
+      "name": "Generate LinkedIn Search URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.searchUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "scrape-linkedin-search",
+      "name": "Scrape LinkedIn Search Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 300],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.item.json.data || $input.item.json.body || '';\nconst role = $input.item.json.role || 'Unknown Role';\nconst resumeText = $input.item.json.resumeText || '';\nconst searchDate = $input.item.json.searchDate || '';\n\nconst jobs = [];\n\n// Parse LinkedIn public job search results page\n// LinkedIn public search returns job cards with data in specific patterns\n\n// Pattern 1: Extract from job card links (public search page)\nconst jobCardRegex = /href=\"(https:\\/\\/www\\.linkedin\\.com\\/jobs\\/view\\/[^\"?]+)/g;\nlet match;\nconst seenUrls = new Set();\n\nwhile ((match = jobCardRegex.exec(html)) !== null) {\n  const jobUrl = match[1];\n  if (!seenUrls.has(jobUrl)) {\n    seenUrls.add(jobUrl);\n    jobs.push({ jobUrl });\n  }\n}\n\n// Pattern 2: Extract from JSON-LD structured data if present\nconst jsonLdRegex = /\"@type\"\\s*:\\s*\"JobPosting\"[^}]*\"title\"\\s*:\\s*\"([^\"]+)\"[^}]*\"hiringOrganization\"\\s*:\\s*\\{[^}]*\"name\"\\s*:\\s*\"([^\"]+)\"[^}]*\"url\"\\s*:\\s*\"([^\"]+)\"/g;\nwhile ((match = jsonLdRegex.exec(html)) !== null) {\n  const jobUrl = match[3];\n  if (!seenUrls.has(jobUrl)) {\n    seenUrls.add(jobUrl);\n    jobs.push({\n      jobTitle: match[1],\n      companyName: match[2],\n      jobUrl: jobUrl\n    });\n  }\n}\n\n// Pattern 3: Extract from base-card pattern (guest/public view)\nconst baseCardRegex = /base-card[^>]*>.*?<a[^>]*href=\"(https:\\/\\/www\\.linkedin\\.com\\/jobs\\/view\\/[^\"?]+)\"[^>]*>.*?<span[^>]*>\\s*([^<]+?)\\s*<\\/span>.*?<h4[^>]*>.*?<a[^>]*>\\s*([^<]+?)\\s*<\\/a>/gs;\nwhile ((match = baseCardRegex.exec(html)) !== null) {\n  const jobUrl = match[1];\n  if (!seenUrls.has(jobUrl)) {\n    seenUrls.add(jobUrl);\n    jobs.push({\n      jobTitle: match[2].trim(),\n      companyName: match[3].trim(),\n      jobUrl: jobUrl\n    });\n  }\n}\n\n// If no jobs found, return a placeholder so the workflow continues\nif (jobs.length === 0) {\n  return [{\n    json: {\n      role: role,\n      resumeText: resumeText,\n      searchDate: searchDate,\n      jobUrl: '',\n      jobTitle: '',\n      companyName: '',\n      noJobsFound: true\n    }\n  }];\n}\n\n// Limit to top 10 per role to stay within free tier limits\nreturn jobs.slice(0, 10).map(job => ({\n  json: {\n    role: role,\n    resumeText: resumeText,\n    searchDate: searchDate,\n    jobUrl: job.jobUrl,\n    jobTitle: job.jobTitle || '',\n    companyName: job.companyName || '',\n    noJobsFound: false\n  }\n}));"
+      },
+      "id": "parse-search-results",
+      "name": "Parse Job Listings from HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-no-jobs",
+              "leftValue": "={{ $json.noJobsFound }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-valid-jobs",
+      "name": "Filter Valid Jobs",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1750, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.jobUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "fetch-job-page",
+      "name": "Fetch Full Job Posting Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 300],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.item.json.data || $input.item.json.body || '';\nlet jobTitle = $input.item.json.jobTitle || '';\nlet companyName = $input.item.json.companyName || '';\nlet jobDescription = '';\nlet datePosted = '';\n\n// Extract job title from page if not already set\nif (!jobTitle) {\n  // Try <title> tag\n  const titleMatch = html.match(/<title[^>]*>([^<|]+)/i);\n  if (titleMatch) {\n    jobTitle = titleMatch[1].trim();\n  }\n  // Try h1 with specific class\n  const h1Match = html.match(/<h1[^>]*class=\"[^\"]*top-card-layout__title[^\"]*\"[^>]*>\\s*([^<]+)/i);\n  if (h1Match) {\n    jobTitle = h1Match[1].trim();\n  }\n}\n\n// Extract company name from page if not already set\nif (!companyName) {\n  const companyMatch = html.match(/<a[^>]*class=\"[^\"]*topcard__org-name-link[^\"]*\"[^>]*>\\s*([^<]+)/i)\n    || html.match(/\"hiringOrganization\"\\s*:\\s*\\{[^}]*\"name\"\\s*:\\s*\"([^\"]+)\"/i)\n    || html.match(/<span[^>]*class=\"[^\"]*company-name[^\"]*\"[^>]*>\\s*([^<]+)/i);\n  if (companyMatch) {\n    companyName = companyMatch[1].trim();\n  }\n}\n\n// Extract date posted\nconst dateMatch = html.match(/\"datePosted\"\\s*:\\s*\"([^\"]+)\"/i)\n  || html.match(/<span[^>]*class=\"[^\"]*posted-time-ago[^\"]*\"[^>]*>\\s*([^<]+)/i)\n  || html.match(/<time[^>]*datetime=\"([^\"]+)\"/i);\nif (dateMatch) {\n  datePosted = dateMatch[1].trim();\n}\n\n// Extract job description\n// Try JSON-LD first\nconst jsonLdDescMatch = html.match(/\"description\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"/i);\nif (jsonLdDescMatch) {\n  jobDescription = jsonLdDescMatch[1]\n    .replace(/\\\\n/g, '\\n')\n    .replace(/\\\\t/g, ' ')\n    .replace(/\\\\u003c/g, '<')\n    .replace(/\\\\u003e/g, '>')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n// Try description section div\nif (!jobDescription) {\n  const descMatch = html.match(/<div[^>]*class=\"[^\"]*description__text[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i)\n    || html.match(/<div[^>]*class=\"[^\"]*show-more-less-html__markup[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i)\n    || html.match(/<section[^>]*class=\"[^\"]*description[^\"]*\"[^>]*>([\\s\\S]*?)<\\/section>/i);\n  if (descMatch) {\n    jobDescription = descMatch[1]\n      .replace(/<[^>]+>/g, ' ')\n      .replace(/&nbsp;/g, ' ')\n      .replace(/&amp;/g, '&')\n      .replace(/&lt;/g, '<')\n      .replace(/&gt;/g, '>')\n      .replace(/&#\\d+;/g, '')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n}\n\n// Truncate description to stay within API limits (keep first 4000 chars)\nif (jobDescription.length > 4000) {\n  jobDescription = jobDescription.substring(0, 4000) + '...';\n}\n\nreturn [{\n  json: {\n    role: $input.item.json.role,\n    resumeText: $input.item.json.resumeText,\n    searchDate: $input.item.json.searchDate,\n    jobUrl: $input.item.json.jobUrl,\n    jobTitle: jobTitle || $input.item.json.role,\n    companyName: companyName || 'Unknown Company',\n    datePosted: datePosted || $input.item.json.searchDate,\n    jobDescription: jobDescription || 'Job description could not be extracted. Please visit the job URL for details.'\n  }\n}];"
+      },
+      "id": "extract-job-details",
+      "name": "Extract Job Details from Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"You are an expert career advisor and resume consultant. Analyze the following job posting against the candidate's resume and provide a structured response.\\n\\n=== CANDIDATE RESUME ===\\n{{ $json.resumeText }}\\n\\n=== JOB POSTING ===\\nTitle: {{ $json.jobTitle }}\\nCompany: {{ $json.companyName }}\\nDescription: {{ $json.jobDescription }}\\n\\n=== INSTRUCTIONS ===\\nProvide your response in EXACTLY this format (use these exact headers):\\n\\nMATCH_SCORE: [a number from 0 to 100 representing how well the candidate matches this job]\\n\\nJOB_SUMMARY: [2-3 sentence summary of the job and key requirements]\\n\\nCOVER_LETTER_START\\n[Write a professional, personalized cover letter for this specific job. Address it to the hiring team at the company. Reference specific skills from the resume that match the job requirements. Keep it to 3-4 paragraphs.]\\nCOVER_LETTER_END\\n\\nRESUME_IMPROVEMENTS:\\n1. [First specific improvement suggestion tied to this job's requirements]\\n2. [Second specific improvement suggestion]\\n3. [Third specific improvement suggestion]\\n4. [Fourth specific improvement suggestion if applicable]\\n5. [Fifth specific improvement suggestion if applicable]\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.7,\n    \"maxOutputTokens\": 2048,\n    \"topP\": 0.95\n  }\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gemini-ai-analysis",
+      "name": "AI Analysis with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2500, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GEMINI_API_KEY_CREDENTIAL_ID",
+          "name": "Gemini API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\n\n// Get AI response text\nlet aiText = '';\ntry {\n  if (item.candidates && item.candidates[0] && item.candidates[0].content) {\n    aiText = item.candidates[0].content.parts[0].text || '';\n  } else if (item.data && item.data.candidates) {\n    aiText = item.data.candidates[0].content.parts[0].text || '';\n  }\n} catch (e) {\n  aiText = '';\n}\n\n// Parse match score\nlet matchScore = 0;\nconst scoreMatch = aiText.match(/MATCH_SCORE:\\s*(\\d+)/i);\nif (scoreMatch) {\n  matchScore = parseInt(scoreMatch[1], 10);\n  if (matchScore > 100) matchScore = 100;\n  if (matchScore < 0) matchScore = 0;\n}\n\n// Parse job summary\nlet jobSummary = '';\nconst summaryMatch = aiText.match(/JOB_SUMMARY:\\s*([\\s\\S]*?)(?=COVER_LETTER_START|$)/i);\nif (summaryMatch) {\n  jobSummary = summaryMatch[1].trim();\n}\n\n// Parse cover letter\nlet coverLetter = '';\nconst coverMatch = aiText.match(/COVER_LETTER_START\\s*([\\s\\S]*?)\\s*COVER_LETTER_END/i);\nif (coverMatch) {\n  coverLetter = coverMatch[1].trim();\n}\n\n// Parse resume improvements\nlet resumeImprovements = '';\nconst improvementsMatch = aiText.match(/RESUME_IMPROVEMENTS:\\s*([\\s\\S]*?)$/i);\nif (improvementsMatch) {\n  resumeImprovements = improvementsMatch[1].trim();\n}\n\n// Carry forward job data from earlier nodes using $('node_name') context\nlet role, resumeText, searchDate, jobUrl, jobTitle, companyName, datePosted, jobDescription;\ntry {\n  const extractNode = $('Extract Job Details from Page').item.json;\n  role = extractNode.role;\n  resumeText = extractNode.resumeText;\n  searchDate = extractNode.searchDate;\n  jobUrl = extractNode.jobUrl;\n  jobTitle = extractNode.jobTitle;\n  companyName = extractNode.companyName;\n  datePosted = extractNode.datePosted;\n  jobDescription = extractNode.jobDescription;\n} catch (e) {\n  // Fallback: data might be nested differently\n  role = item.role || '';\n  searchDate = item.searchDate || '';\n  jobUrl = item.jobUrl || '';\n  jobTitle = item.jobTitle || '';\n  companyName = item.companyName || '';\n  datePosted = item.datePosted || '';\n  jobDescription = item.jobDescription || '';\n}\n\nreturn [{\n  json: {\n    jobTitle: jobTitle || 'Unknown Title',\n    companyName: companyName || 'Unknown Company',\n    jobUrl: jobUrl || '',\n    datePosted: datePosted || '',\n    jobDescriptionSummary: jobSummary || 'Summary not available',\n    matchScore: matchScore,\n    coverLetter: coverLetter || 'Cover letter generation failed',\n    resumeImprovements: resumeImprovements || 'Improvements not available',\n    dateAdded: new Date().toISOString().split('T')[0],\n    role: role || '',\n    searchDate: searchDate || ''\n  }\n}];"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2750, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Job Title": "={{ $json.jobTitle }}",
+            "Company Name": "={{ $json.companyName }}",
+            "Job URL": "={{ $json.jobUrl }}",
+            "Date Posted": "={{ $json.datePosted }}",
+            "Job Description Summary": "={{ $json.jobDescriptionSummary }}",
+            "Match Score": "={{ $json.matchScore }}",
+            "Cover Letter": "={{ $json.coverLetter }}",
+            "Resume Improvements": "={{ $json.resumeImprovements }}",
+            "Date Added": "={{ $json.dateAdded }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "Job Title", "displayName": "Job Title", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Company Name", "displayName": "Company Name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Job URL", "displayName": "Job URL", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Date Posted", "displayName": "Date Posted", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Job Description Summary", "displayName": "Job Description Summary", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Match Score", "displayName": "Match Score", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "Cover Letter", "displayName": "Cover Letter", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Resume Improvements", "displayName": "Resume Improvements", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Date Added", "displayName": "Date Added", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "google-sheets-append",
+      "name": "Append to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [3000, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate All Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [3250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.first().json.data || [];\n\nconst totalJobs = allItems.length;\nconst today = new Date().toISOString().split('T')[0];\n\n// Group by role\nconst byRole = {};\nfor (const item of allItems) {\n  const role = item.role || 'Unknown';\n  if (!byRole[role]) byRole[role] = [];\n  byRole[role].push(item);\n}\n\n// Build summary\nlet roleBreakdown = '';\nfor (const [role, jobs] of Object.entries(byRole)) {\n  const avgScore = jobs.length > 0 \n    ? Math.round(jobs.reduce((sum, j) => sum + (j.matchScore || 0), 0) / jobs.length)\n    : 0;\n  roleBreakdown += `<tr><td style=\"padding:8px;border:1px solid #ddd;\">${role}</td><td style=\"padding:8px;border:1px solid #ddd;text-align:center;\">${jobs.length}</td><td style=\"padding:8px;border:1px solid #ddd;text-align:center;\">${avgScore}/100</td></tr>`;\n}\n\n// Top matches (score >= 70)\nconst topMatches = allItems\n  .filter(j => (j.matchScore || 0) >= 70)\n  .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0))\n  .slice(0, 5);\n\nlet topMatchesHtml = '';\nif (topMatches.length > 0) {\n  topMatchesHtml = '<h3 style=\"color:#2e7d32;\">🎯 Top Matches (Score ≥ 70)</h3><ul>';\n  for (const job of topMatches) {\n    topMatchesHtml += `<li><strong>${job.jobTitle}</strong> at ${job.companyName} — Score: ${job.matchScore}/100 (<a href=\"${job.jobUrl}\">View Job</a>)</li>`;\n  }\n  topMatchesHtml += '</ul>';\n} else {\n  topMatchesHtml = '<p style=\"color:#666;\">No high-match jobs found today (score ≥ 70). Review the Google Sheet for all results.</p>';\n}\n\nconst emailBody = `\n<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto;\">\n  <div style=\"background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0;\">\n    <h1 style=\"margin:0;\">Daily Job Search Report</h1>\n    <p style=\"margin:5px 0 0 0;opacity:0.9;\">${today}</p>\n  </div>\n  \n  <div style=\"padding:20px;background:#f8f9fa;\">\n    <div style=\"background:white;padding:20px;border-radius:8px;margin-bottom:15px;box-shadow:0 1px 3px rgba(0,0,0,0.1);\">\n      <h2 style=\"color:#1a73e8;margin-top:0;\">Summary</h2>\n      <p style=\"font-size:24px;font-weight:bold;color:#333;\">${totalJobs} jobs found today</p>\n      \n      <table style=\"width:100%;border-collapse:collapse;margin-top:10px;\">\n        <tr style=\"background:#1a73e8;color:white;\">\n          <th style=\"padding:8px;border:1px solid #ddd;text-align:left;\">Role</th>\n          <th style=\"padding:8px;border:1px solid #ddd;text-align:center;\">Jobs Found</th>\n          <th style=\"padding:8px;border:1px solid #ddd;text-align:center;\">Avg Match</th>\n        </tr>\n        ${roleBreakdown}\n      </table>\n    </div>\n    \n    <div style=\"background:white;padding:20px;border-radius:8px;margin-bottom:15px;box-shadow:0 1px 3px rgba(0,0,0,0.1);\">\n      ${topMatchesHtml}\n    </div>\n    \n    <div style=\"background:white;padding:20px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.1);\">\n      <h3 style=\"color:#555;margin-top:0;\">Next Steps</h3>\n      <ul>\n        <li>Review all results in <a href=\"https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID_HERE\">your Google Sheet</a></li>\n        <li>Prioritize jobs with match scores above 70</li>\n        <li>Use the generated cover letters as starting points</li>\n        <li>Apply the resume improvement suggestions for your top choices</li>\n      </ul>\n    </div>\n    \n    <p style=\"color:#999;font-size:12px;text-align:center;margin-top:20px;\">This report was automatically generated by your n8n Job Search Workflow.</p>\n  </div>\n</div>\n`;\n\nreturn [{\n  json: {\n    emailSubject: `Job Search Report: ${totalJobs} jobs found — ${today}`,\n    emailBody: emailBody,\n    totalJobs: totalJobs\n  }\n}];"
+      },
+      "id": "build-email-summary",
+      "name": "Build Email Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3500, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_EMAIL_HERE",
+        "subject": "={{ $json.emailSubject }}",
+        "message": "={{ $json.emailBody }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-gmail-summary",
+      "name": "Send Gmail Summary",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [3750, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 5AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download Resume from Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Resume from Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Extract Resume Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Resume Text": {
+      "main": [
+        [
+          {
+            "node": "Store Resume Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Resume Text": {
+      "main": [
+        [
+          {
+            "node": "Generate LinkedIn Search URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate LinkedIn Search URLs": {
+      "main": [
+        [
+          {
+            "node": "Scrape LinkedIn Search Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape LinkedIn Search Results": {
+      "main": [
+        [
+          {
+            "node": "Parse Job Listings from HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Job Listings from HTML": {
+      "main": [
+        [
+          {
+            "node": "Filter Valid Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Valid Jobs": {
+      "main": [
+        [
+          {
+            "node": "Fetch Full Job Posting Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Full Job Posting Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Job Details from Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Job Details from Page": {
+      "main": [
+        [
+          {
+            "node": "AI Analysis with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate All Results": {
+      "main": [
+        [
+          {
+            "node": "Build Email Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "job-search",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "automation",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
